@@ -1090,13 +1090,6 @@ function App() {
 }
 
 function Root() {
-  const [configured, setConfigured] = useState(
-    !!(window.JSONBIN_API_KEY && window.JSONBIN_BIN_ID)
-  );
-
-  if (!configured) {
-    return <SetupScreen onDone={() => setConfigured(true)} />;
-  }
   return <App />;
 }
 
