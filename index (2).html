@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MS 2026 Tipovačka ⚽</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --color-background-primary:#111;
+      --color-background-secondary:#1a1a1a;
+      --color-text-primary:#f0f0f0;
+      --color-text-secondary:#888;
+      --color-text-tertiary:#555;
+      --color-border-tertiary:#2a2a2a;
+      --color-text-success:#10b981;
+      --color-text-danger:#ef4444;
+      --border-radius-lg:12px;
+      --border-radius-md:8px;
+      --border-radius-sm:4px;
+    }
+    html,body{background:#111;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+    #root{min-height:100vh}
+    input,button{font-family:inherit;font-size:14px;border-radius:var(--border-radius-md);outline:none}
+    input{background:#1a1a1a;border:0.5px solid #2a2a2a;color:#f0f0f0;padding:8px 12px}
+    input:focus{border-color:#555}
+    input[type=number]{-moz-appearance:textfield}
+    input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+    button{background:#1a1a1a;border:0.5px solid #2a2a2a;color:#f0f0f0;padding:7px 14px;cursor:pointer}
+    button:hover{background:#252525}
+    strong{font-weight:700}
+    ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#111}::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ─────────────────────────────────────────────────────────────
+//  KONFIGURACE  (volitelné — lze vyplnit zde nebo přes UI)
+//  API Key a Bin ID z jsonbin.io
+// ─────────────────────────────────────────────────────────────
+var JSONBIN_API_KEY = "";   // např. "$2a$10$abc..."
+var JSONBIN_BIN_ID  = "";   // např. "64abc123..."
+// ─────────────────────────────────────────────────────────────
+
+(function(){
+  var _cache = null;
+  var _lastFetch = 0;
+  var _saveTimer = null;
+  var TTL = 8000;
+
+  // Načte celý bin z JSONBin a uloží do cache
+  async function fetchAll() {
+    var res = await fetch("https://api.jsonbin.io/v3/b/" + JSONBIN_BIN_ID + "/latest", {
+      headers: { "X-Master-Key": JSONBIN_API_KEY, "X-Bin-Meta": "false" }
+    });
+    if (!res.ok) throw new Error("fetch " + res.status);
+    var data = await res.json();
+    // JSONBin vrací buď přímo objekt nebo { record: ... }
+    _cache = (data && typeof data === "object" && !Array.isArray(data)) ? data : {};
+    _lastFetch = Date.now();
+    return _cache;
+  }
+
+  // Zapíše celý cache do JSONBin (debounced)
+  function scheduleSave(resolve, reject) {
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(async function() {
+      try {
+        var res = await fetch("https://api.jsonbin.io/v3/b/" + JSONBIN_BIN_ID, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY },
+          body: JSON.stringify(_cache || {})
+        });
+        if (!res.ok) { if(reject) reject(new Error("write " + res.status)); return; }
+        if(resolve) resolve(true);
+      } catch(e) { if(reject) reject(e); }
+    }, 600);
+  }
+
+  window.storage = {
+    // GET — vrátí { key, value } nebo null (nikdy nehází error pro chybějící klíč)
+    get: async function(key, shared, forceRefresh) {
+      if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) return null;
+      try {
+        var now = Date.now();
+        if (forceRefresh || !_cache || (now - _lastFetch) >= TTL) {
+          await fetchAll();
+        }
+        var val = (_cache || {})[key];
+        if (val === undefined || val === null) return null;
+        return { key: key, value: val, shared: true };
+      } catch(e) {
+        console.warn("storage.get error:", e);
+        return null;
+      }
+    },
+
+    // SET — uloží hodnotu, vrátí { key, value } nebo null při chybě
+    set: async function(key, value, shared) {
+      if (!JSONBIN_API_KEY || !JSONBIN_BIN_ID) return null;
+      if (!_cache) _cache = {};
+      _cache[key] = value;
+      _lastFetch = Date.now();
+      return new Promise(function(resolve) {
+        scheduleSave(
+          function() { resolve({ key: key, value: value, shared: true }); },
+          function(e) { console.warn("storage.set error:", e); resolve(null); }
+        );
+      });
+    },
+
+    // DELETE
+    delete: async function(key, shared) {
+      if (_cache) delete _cache[key];
+      scheduleSave(null, null);
+      return { key: key, deleted: true };
+    },
+
+    // LIST
+    list: async function(prefix, shared) {
+      return { keys: Object.keys(_cache || {}).filter(function(k){ return !prefix || k.startsWith(prefix); }) };
+    }
+  };
+
+  window.createBin = async function(apiKey) {
+    var res = await fetch("https://api.jsonbin.io/v3/b", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Master-Key": apiKey,
+        "X-Bin-Name": "ms2026-tipovacka",
+        "X-Bin-Private": "false"
+      },
+      body: JSON.stringify({ initialized: true })
+    });
+    if (!res.ok) {
+      var err = await res.json().catch(function(){ return {}; });
+      throw new Error(err.message || "HTTP " + res.status);
+    }
+    var data = await res.json();
+    return data.metadata.id;
+  };
+})();
+</script>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ── Setup obrazovka ──
+function SetupScreen({ onDone }) {
+  const [apiKey, setApiKey] = useState("");
+  const [binId, setBinId]   = useState("");
+  const [err, setErr]       = useState("");
+  const [loading, setLoading] = useState(false);
+  const [created, setCreated] = useState(false);
+
+  const card = { background:"#1a1a1a", border:"0.5px solid #2a2a2a", borderRadius:12, padding:"1.5rem", marginBottom:16 };
+  const inp  = { width:"100%", boxSizing:"border-box" };
+  const errBox = { fontSize:13, color:"#ef4444", background:"rgba(239,68,68,0.1)", borderRadius:8, padding:"8px 12px", marginTop:10 };
+
+  const doCreate = async () => {
+    if (!apiKey.trim()) return setErr("Zadej API klíč.");
+    setLoading(true); setErr("");
+    try {
+      const id = await window.createBin(apiKey.trim());
+      setBinId(id); setCreated(true);
+    } catch(e) { setErr("Chyba: " + e.message); }
+    finally { setLoading(false); }
+  };
+
+  const doConnect = () => {
+    if (!apiKey.trim() || !binId.trim()) return setErr("Vyplň obě pole.");
+    window.JSONBIN_API_KEY = apiKey.trim();
+    window.JSONBIN_BIN_ID  = binId.trim();
+    localStorage.setItem("ms2026_apikey", apiKey.trim());
+    localStorage.setItem("ms2026_binid", binId.trim());
+    onDone();
+  };
+
+  return (
+    <div style={{ maxWidth:440, margin:"0 auto", padding:"2rem 1rem" }}>
+      <div style={{ textAlign:"center", marginBottom:"1.5rem" }}>
+        <div style={{ fontSize:52 }}>⚽</div>
+        <h1 style={{ fontSize:22, fontWeight:700, margin:"8px 0 4px" }}>MS 2026 Tipovačka</h1>
+        <p style={{ color:"#888", fontSize:14 }}>Nastav cloudové úložiště pro sdílení dat mezi hráči</p>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontWeight:700, fontSize:15, marginBottom:12 }}>1. Získej API klíč z JSONBin.io</div>
+        <ol style={{ fontSize:13, color:"#aaa", paddingLeft:20, lineHeight:2.2 }}>
+          <li>Jdi na <a href="https://jsonbin.io" target="_blank" style={{ color:"#10b981" }}>jsonbin.io</a> a zaregistruj se zdarma</li>
+          <li>Po přihlášení jdi do <strong>API Keys</strong></li>
+          <li>Zkopíruj svůj <strong>X-Master-Key</strong></li>
+        </ol>
+        <div style={{ marginTop:14 }}>
+          <label style={{ fontSize:13, color:"#888", display:"block", marginBottom:6 }}>X-Master-Key</label>
+          <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="$2a$10$..." style={inp}/>
+        </div>
+        {!created ? (
+          <button onClick={doCreate} disabled={loading}
+            style={{ width:"100%", padding:"10px 0", fontSize:14, fontWeight:600, marginTop:12, cursor:"pointer" }}>
+            {loading ? "Vytvářím úložiště…" : "2. Vytvořit nové úložiště →"}
+          </button>
+        ) : (
+          <div style={{ background:"rgba(16,185,129,0.1)", border:"0.5px solid rgba(16,185,129,0.3)", borderRadius:8, padding:"12px", marginTop:12 }}>
+            <div style={{ fontSize:13, color:"#10b981", fontWeight:700, marginBottom:4 }}>✓ Úložiště vytvořeno!</div>
+            <div style={{ fontSize:12, color:"#888", marginBottom:8 }}>Ulož si tato čísla — budou je potřebovat i kamarádi.</div>
+            <div style={{ fontSize:13 }}>API Key: <strong style={{ color:"#f0f0f0" }}>{apiKey.slice(0,20)}…</strong></div>
+            <div style={{ fontSize:13 }}>Bin ID: <strong style={{ color:"#f0f0f0" }}>{binId}</strong></div>
+          </div>
+        )}
+        {err && <div style={errBox}>{err}</div>}
+      </div>
+
+      {created && (
+        <button onClick={doConnect}
+          style={{ width:"100%", padding:"12px 0", fontSize:15, fontWeight:700, cursor:"pointer", background:"#10b981", color:"#fff", border:"none", borderRadius:12 }}>
+          Vstoupit do hry →
+        </button>
+      )}
+
+      <div style={{ ...card, marginTop:16 }}>
+        <div style={{ fontWeight:700, fontSize:14, marginBottom:10 }}>Připojit se k existujícímu úložišti</div>
+        <p style={{ fontSize:13, color:"#888", marginBottom:12 }}>Pokud ti někdo poslal API Key a Bin ID, zadej je zde.</p>
+        <div style={{ marginBottom:10 }}>
+          <label style={{ fontSize:13, color:"#888", display:"block", marginBottom:6 }}>X-Master-Key</label>
+          <input value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="$2a$10$..." style={inp}/>
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ fontSize:13, color:"#888", display:"block", marginBottom:6 }}>Bin ID</label>
+          <input value={binId} onChange={e=>setBinId(e.target.value)} placeholder="64abc123..." style={inp}/>
+        </div>
+        {err && <div style={errBox}>{err}</div>}
+        <button onClick={doConnect} style={{ width:"100%", padding:"10px 0", fontSize:14, fontWeight:600, cursor:"pointer" }}>
+          Připojit se →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Root() {
+  // Restore JSONBin config from localStorage on refresh
+  if (!window.JSONBIN_API_KEY || !window.JSONBIN_BIN_ID) {
+    const savedKey = localStorage.getItem("ms2026_apikey");
+    const savedBin = localStorage.getItem("ms2026_binid");
+    if (savedKey && savedBin) {
+      window.JSONBIN_API_KEY = savedKey;
+      window.JSONBIN_BIN_ID  = savedBin;
+    }
+  }
+
+  const [configured, setConfigured] = useState(
+    !!(window.JSONBIN_API_KEY && window.JSONBIN_BIN_ID)
+  );
+  if (!configured) return <SetupScreen onDone={()=>setConfigured(true)}/>;
+  return <App/>;
+}
+
+
+const MATCHES = [
+  // ── SKUPINY (72 zápasů) ──
+  { id: 1, group: "A", home: "Mexiko", away: "J. Afrika", date: "2026-06-11", time: "21:00", stage: "Skupiny" },
+  { id: 2, group: "A", home: "J. Korea", away: "Česko", date: "2026-06-12", time: "04:00", stage: "Skupiny" },
+  { id: 3, group: "B", home: "Kanada", away: "Bosna", date: "2026-06-12", time: "21:00", stage: "Skupiny" },
+  { id: 4, group: "D", home: "USA", away: "Paraguay", date: "2026-06-13", time: "03:00", stage: "Skupiny" },
+  { id: 5, group: "B", home: "Katar", away: "Švýcarsko", date: "2026-06-13", time: "21:00", stage: "Skupiny" },
+  { id: 6, group: "C", home: "Brazílie", away: "Maroko", date: "2026-06-14", time: "00:00", stage: "Skupiny" },
+  { id: 7, group: "C", home: "Haiti", away: "Skotsko", date: "2026-06-14", time: "03:00", stage: "Skupiny" },
+  { id: 8, group: "D", home: "Austrálie", away: "Turecko", date: "2026-06-14", time: "06:00", stage: "Skupiny" },
+  { id: 9, group: "E", home: "Německo", away: "Curaçao", date: "2026-06-14", time: "19:00", stage: "Skupiny" },
+  { id: 10, group: "F", home: "Nizozemsko", away: "Japonsko", date: "2026-06-14", time: "22:00", stage: "Skupiny" },
+  { id: 11, group: "E", home: "Pobř. slonoviny", away: "Ekvádor", date: "2026-06-15", time: "01:00", stage: "Skupiny" },
+  { id: 12, group: "F", home: "Švédsko", away: "Tunisko", date: "2026-06-15", time: "04:00", stage: "Skupiny" },
+  { id: 13, group: "H", home: "Španělsko", away: "Kapverdy", date: "2026-06-15", time: "18:00", stage: "Skupiny" },
+  { id: 14, group: "G", home: "Belgie", away: "Egypt", date: "2026-06-15", time: "21:00", stage: "Skupiny" },
+  { id: 15, group: "H", home: "S. Arábie", away: "Uruguay", date: "2026-06-16", time: "00:00", stage: "Skupiny" },
+  { id: 16, group: "G", home: "Írán", away: "N. Zéland", date: "2026-06-16", time: "03:00", stage: "Skupiny" },
+  { id: 17, group: "I", home: "Francie", away: "Senegal", date: "2026-06-16", time: "21:00", stage: "Skupiny" },
+  { id: 18, group: "I", home: "Irák", away: "Norsko", date: "2026-06-17", time: "00:00", stage: "Skupiny" },
+  { id: 19, group: "J", home: "Argentina", away: "Alžírsko", date: "2026-06-17", time: "03:00", stage: "Skupiny" },
+  { id: 20, group: "J", home: "Rakousko", away: "Jordánsko", date: "2026-06-17", time: "06:00", stage: "Skupiny" },
+  { id: 21, group: "K", home: "Portugalsko", away: "DR Kongo", date: "2026-06-17", time: "19:00", stage: "Skupiny" },
+  { id: 22, group: "L", home: "Anglie", away: "Chorvatsko", date: "2026-06-17", time: "22:00", stage: "Skupiny" },
+  { id: 23, group: "L", home: "Ghana", away: "Panama", date: "2026-06-18", time: "01:00", stage: "Skupiny" },
+  { id: 24, group: "K", home: "Uzbekistán", away: "Kolumbie", date: "2026-06-18", time: "04:00", stage: "Skupiny" },
+  { id: 25, group: "A", home: "Česko", away: "J. Afrika", date: "2026-06-18", time: "18:00", stage: "Skupiny" },
+  { id: 26, group: "B", home: "Švýcarsko", away: "Bosna", date: "2026-06-18", time: "21:00", stage: "Skupiny" },
+  { id: 27, group: "B", home: "Kanada", away: "Katar", date: "2026-06-19", time: "00:00", stage: "Skupiny" },
+  { id: 28, group: "A", home: "Mexiko", away: "J. Korea", date: "2026-06-19", time: "03:00", stage: "Skupiny" },
+  { id: 29, group: "D", home: "USA", away: "Austrálie", date: "2026-06-19", time: "21:00", stage: "Skupiny" },
+  { id: 30, group: "C", home: "Skotsko", away: "Maroko", date: "2026-06-20", time: "00:00", stage: "Skupiny" },
+  { id: 31, group: "C", home: "Brazílie", away: "Haiti", date: "2026-06-20", time: "02:30", stage: "Skupiny" },
+  { id: 32, group: "D", home: "Turecko", away: "Paraguay", date: "2026-06-20", time: "05:00", stage: "Skupiny" },
+  { id: 33, group: "F", home: "Nizozemsko", away: "Švédsko", date: "2026-06-20", time: "19:00", stage: "Skupiny" },
+  { id: 34, group: "E", home: "Německo", away: "Pobř. slonoviny", date: "2026-06-20", time: "22:00", stage: "Skupiny" },
+  { id: 35, group: "E", home: "Ekvádor", away: "Curaçao", date: "2026-06-21", time: "02:00", stage: "Skupiny" },
+  { id: 36, group: "F", home: "Tunisko", away: "Japonsko", date: "2026-06-21", time: "06:00", stage: "Skupiny" },
+  { id: 37, group: "H", home: "Španělsko", away: "S. Arábie", date: "2026-06-21", time: "18:00", stage: "Skupiny" },
+  { id: 38, group: "G", home: "Belgie", away: "Írán", date: "2026-06-21", time: "21:00", stage: "Skupiny" },
+  { id: 39, group: "H", home: "Uruguay", away: "Kapverdy", date: "2026-06-22", time: "00:00", stage: "Skupiny" },
+  { id: 40, group: "G", home: "N. Zéland", away: "Egypt", date: "2026-06-22", time: "03:00", stage: "Skupiny" },
+  { id: 41, group: "J", home: "Argentina", away: "Rakousko", date: "2026-06-22", time: "19:00", stage: "Skupiny" },
+  { id: 42, group: "I", home: "Francie", away: "Irák", date: "2026-06-22", time: "23:00", stage: "Skupiny" },
+  { id: 43, group: "I", home: "Norsko", away: "Senegal", date: "2026-06-23", time: "02:00", stage: "Skupiny" },
+  { id: 44, group: "J", home: "Jordánsko", away: "Alžírsko", date: "2026-06-23", time: "05:00", stage: "Skupiny" },
+  { id: 45, group: "K", home: "Portugalsko", away: "Uzbekistán", date: "2026-06-23", time: "19:00", stage: "Skupiny" },
+  { id: 46, group: "L", home: "Anglie", away: "Ghana", date: "2026-06-23", time: "22:00", stage: "Skupiny" },
+  { id: 47, group: "L", home: "Panama", away: "Chorvatsko", date: "2026-06-24", time: "01:00", stage: "Skupiny" },
+  { id: 48, group: "K", home: "Kolumbie", away: "DR Kongo", date: "2026-06-24", time: "04:00", stage: "Skupiny" },
+  { id: 49, group: "B", home: "Bosna", away: "Katar", date: "2026-06-24", time: "21:00", stage: "Skupiny" },
+  { id: 50, group: "B", home: "Švýcarsko", away: "Kanada", date: "2026-06-24", time: "21:00", stage: "Skupiny" },
+  { id: 51, group: "C", home: "Maroko", away: "Haiti", date: "2026-06-25", time: "00:00", stage: "Skupiny" },
+  { id: 52, group: "C", home: "Skotsko", away: "Brazílie", date: "2026-06-25", time: "00:00", stage: "Skupiny" },
+  { id: 53, group: "A", home: "Česko", away: "Mexiko", date: "2026-06-25", time: "03:00", stage: "Skupiny" },
+  { id: 54, group: "A", home: "J. Afrika", away: "J. Korea", date: "2026-06-25", time: "03:00", stage: "Skupiny" },
+  { id: 55, group: "E", home: "Curaçao", away: "Pobř. slonoviny", date: "2026-06-25", time: "22:00", stage: "Skupiny" },
+  { id: 56, group: "E", home: "Ekvádor", away: "Německo", date: "2026-06-25", time: "22:00", stage: "Skupiny" },
+  { id: 57, group: "F", home: "Japonsko", away: "Švédsko", date: "2026-06-26", time: "01:00", stage: "Skupiny" },
+  { id: 58, group: "F", home: "Tunisko", away: "Nizozemsko", date: "2026-06-26", time: "01:00", stage: "Skupiny" },
+  { id: 59, group: "D", home: "Paraguay", away: "Austrálie", date: "2026-06-26", time: "04:00", stage: "Skupiny" },
+  { id: 60, group: "D", home: "Turecko", away: "USA", date: "2026-06-26", time: "04:00", stage: "Skupiny" },
+  { id: 61, group: "I", home: "Norsko", away: "Francie", date: "2026-06-26", time: "21:00", stage: "Skupiny" },
+  { id: 62, group: "I", home: "Senegal", away: "Irák", date: "2026-06-26", time: "21:00", stage: "Skupiny" },
+  { id: 63, group: "H", home: "Kapverdy", away: "S. Arábie", date: "2026-06-27", time: "02:00", stage: "Skupiny" },
+  { id: 64, group: "H", home: "Uruguay", away: "Španělsko", date: "2026-06-27", time: "02:00", stage: "Skupiny" },
+  { id: 65, group: "G", home: "Egypt", away: "Írán", date: "2026-06-27", time: "05:00", stage: "Skupiny" },
+  { id: 66, group: "G", home: "N. Zéland", away: "Belgie", date: "2026-06-27", time: "05:00", stage: "Skupiny" },
+  { id: 67, group: "L", home: "Chorvatsko", away: "Ghana", date: "2026-06-27", time: "23:00", stage: "Skupiny" },
+  { id: 68, group: "L", home: "Panama", away: "Anglie", date: "2026-06-27", time: "23:00", stage: "Skupiny" },
+  { id: 69, group: "K", home: "DR Kongo", away: "Uzbekistán", date: "2026-06-28", time: "01:30", stage: "Skupiny" },
+  { id: 70, group: "K", home: "Kolumbie", away: "Portugalsko", date: "2026-06-28", time: "01:30", stage: "Skupiny" },
+  { id: 71, group: "J", home: "Alžírsko", away: "Rakousko", date: "2026-06-28", time: "04:00", stage: "Skupiny" },
+  { id: 72, group: "J", home: "Jordánsko", away: "Argentina", date: "2026-06-28", time: "04:00", stage: "Skupiny" },
+
+  // ── KO FÁZE ──
+  // ── KO FÁZE ──
+  // ── KO FÁZE ──
+  { id: 1001, group: "R16", home: "2A", away: "2B", date: "2026-06-28", time: "21:00", stage: "Šestnáctifinále" },
+  { id: 1002, group: "R16", home: "1C", away: "2F", date: "2026-06-30", time: "03:00", stage: "Šestnáctifinále" },
+  { id: 1003, group: "R16", home: "1E", away: "3 A/B/C/D/F", date: "2026-06-29", time: "22:30", stage: "Šestnáctifinále" },
+  { id: 1004, group: "R16", home: "1F", away: "2C", date: "2026-06-30", time: "23:00", stage: "Šestnáctifinále" },
+  { id: 1005, group: "R16", home: "2E", away: "2I", date: "2026-07-01", time: "22:00", stage: "Šestnáctifinále" },
+  { id: 1006, group: "R16", home: "1I", away: "3 C/D/F/G/H", date: "2026-07-02", time: "02:00", stage: "Šestnáctifinále" },
+  { id: 1007, group: "R16", home: "1A", away: "3 C/E/F/H/I", date: "2026-07-02", time: "21:00", stage: "Šestnáctifinále" },
+  { id: 1008, group: "R16", home: "1L", away: "3 E/H/I/J/K", date: "2026-07-03", time: "01:00", stage: "Šestnáctifinále" },
+  { id: 1009, group: "R16", home: "1D", away: "3 B/E/F/I/J", date: "2026-06-29", time: "19:00", stage: "Šestnáctifinále" },
+  { id: 1010, group: "R16", home: "1G", away: "3 A/E/H/I/J", date: "2026-06-30", time: "19:00", stage: "Šestnáctifinále" },
+  { id: 1011, group: "R16", home: "2K", away: "2L", date: "2026-07-01", time: "03:00", stage: "Šestnáctifinále" },
+  { id: 1012, group: "R16", home: "1H", away: "2J", date: "2026-07-01", time: "18:00", stage: "Šestnáctifinále" },
+  { id: 1013, group: "R16", home: "1B", away: "3 E/F/G/I/J", date: "2026-07-03", time: "05:00", stage: "Šestnáctifinále" },
+  { id: 1014, group: "R16", home: "1J", away: "2H", date: "2026-07-04", time: "03:30", stage: "Šestnáctifinále" },
+  { id: 1015, group: "R16", home: "1K", away: "3 D/E/I/J/L", date: "2026-07-03", time: "20:00", stage: "Šestnáctifinále" },
+  { id: 1016, group: "R16", home: "2D", away: "2G", date: "2026-07-04", time: "00:00", stage: "Šestnáctifinále" },
+  { id: 2001, group: "QF", home: "Vítěz Š1", away: "Vítěz Š2", date: "2026-07-04", time: "21:00", stage: "Osmifinále" },
+  { id: 2002, group: "QF", home: "Vítěz Š3", away: "Vítěz Š4", date: "2026-07-04", time: "00:00", stage: "Osmifinále" },
+  { id: 2003, group: "QF", home: "Vítěz Š5", away: "Vítěz Š6", date: "2026-07-07", time: "21:00", stage: "Osmifinále" },
+  { id: 2004, group: "QF", home: "Vítěz Š7", away: "Vítěz Š8", date: "2026-07-06", time: "21:00", stage: "Osmifinále" },
+  { id: 2005, group: "QF", home: "Vítěz Š9", away: "Vítěz Š10", date: "2026-07-05", time: "19:00", stage: "Osmifinále" },
+  { id: 2006, group: "QF", home: "Vítěz Š11", away: "Vítěz Š12", date: "2026-07-06", time: "22:00", stage: "Osmifinále" },
+  { id: 2007, group: "QF", home: "Vítěz Š13", away: "Vítěz Š14", date: "2026-07-07", time: "19:00", stage: "Osmifinále" },
+  { id: 2008, group: "QF", home: "Vítěz Š15", away: "Vítěz Š16", date: "2026-07-07", time: "03:00", stage: "Osmifinále" },
+  { id: 3001, group: "SF", home: "Vítěz OF1", away: "Vítěz OF2", date: "2026-07-09", time: "21:00", stage: "Čtvrtfinále" },
+  { id: 3002, group: "SF", home: "Vítěz OF3", away: "Vítěz OF4", date: "2026-07-10", time: "21:00", stage: "Čtvrtfinále" },
+  { id: 3003, group: "SF", home: "Vítěz OF5", away: "Vítěz OF6", date: "2026-07-11", time: "21:00", stage: "Čtvrtfinále" },
+  { id: 3004, group: "SF", home: "Vítěz OF7", away: "Vítěz OF8", date: "2026-07-12", time: "03:00", stage: "Čtvrtfinále" },
+  { id: 4001, group: "FIN", home: "Vítěz ČF1", away: "Vítěz ČF2", date: "2026-07-14", time: "21:00", stage: "Semifinále" },
+  { id: 4002, group: "FIN", home: "Vítěz ČF3", away: "Vítěz ČF4", date: "2026-07-15", time: "21:00", stage: "Semifinále" },
+  { id: 5001, group: "3RD", home: "Poražený SF1", away: "Poražený SF2", date: "2026-07-18", time: "23:00", stage: "O 3. místo" },
+  { id: 5002, group: "FIN", home: "Vítěz SF1", away: "Vítěz SF2", date: "2026-07-19", time: "21:00", stage: "Finále" },
+];
+
+
+
+const FLAG = {
+  "Mexiko":"🇲🇽","J. Afrika":"🇿🇦","J. Korea":"🇰🇷","Česko":"🇨🇿",
+  "Kanada":"🇨🇦","Bosna":"🇧🇦","Katar":"🇶🇦","Švýcarsko":"🇨🇭",
+  "Brazílie":"🇧🇷","Maroko":"🇲🇦","Haiti":"🇭🇹","Skotsko":"🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+  "USA":"🇺🇸","Paraguay":"🇵🇾","Austrálie":"🇦🇺","Turecko":"🇹🇷",
+  "Německo":"🇩🇪","Curaçao":"🇨🇼","Pobř. slonoviny":"🇨🇮","Ekvádor":"🇪🇨",
+  "Nizozemsko":"🇳🇱","Japonsko":"🇯🇵","Švédsko":"🇸🇪","Tunisko":"🇹🇳",
+  "Španělsko":"🇪🇸","Kapverdy":"🇨🇻","Belgie":"🇧🇪","Egypt":"🇪🇬",
+  "S. Arábie":"🇸🇦","Uruguay":"🇺🇾","Írán":"🇮🇷","N. Zéland":"🇳🇿",
+  "Francie":"🇫🇷","Senegal":"🇸🇳","Irák":"🇮🇶","Norsko":"🇳🇴",
+  "Argentina":"🇦🇷","Alžírsko":"🇩🇿","Rakousko":"🇦🇹","Jordánsko":"🇯🇴",
+  "Portugalsko":"🇵🇹","DR Kongo":"🇨🇩","Uzbekistán":"🇺🇿","Kolumbie":"🇨🇴",
+  "Anglie":"🏴󠁧󠁢󠁥󠁮󠁧󠁿","Chorvatsko":"🇭🇷","Ghana":"🇬🇭","Panama":"🇵🇦",
+};
+
+
+const ADMIN_CODE = "MS2026admin";
+const STORAGE_KEY = "wc2026_v14";
+const STAGES = ["Skupiny","Šestnáctifinále","Osmifinále","Čtvrtfinále","Semifinále","Finále","O 3. místo"];
+
+function hashPw(pw) {
+  let h = 5381;
+  for (let i = 0; i < pw.length; i++) h = ((h << 5) + h) ^ pw.charCodeAt(i);
+  return (h >>> 0).toString(36);
+}
+
+function calcPoints(tip, result) {
+  if (!tip || !result) return null;
+  const [th, ta] = tip.split(":").map(Number);
+  const [rh, ra] = result.split(":").map(Number);
+  if ([th,ta,rh,ra].some(isNaN)) return null;
+  if (th === rh && ta === ra) return 5;
+  const td = th > ta ? 1 : th < ta ? -1 : 0;
+  const rd = rh > ra ? 1 : rh < ra ? -1 : 0;
+  let pts = td === rd ? 3 : 0;
+  if (th === rh || ta === ra) pts += 1;
+  return pts;
+}
+
+function calcFinal(tip, result, card) {
+  const base = calcPoints(tip, result);
+  if (base === null) return null;
+  if (card === "joker") return base * 2;
+  if (card === "risk") return base === 5 ? 8 : -2;
+  return base;
+}
+
+function isAfterKickoff(match) {
+  return new Date() >= new Date(`${match.date}T${match.time}:00`);
+}
+
+// ── reusable styles ──
+const card = { background:"var(--color-background-primary)", border:"0.5px solid var(--color-border-tertiary)", borderRadius:"var(--border-radius-lg)" };
+const pill = (active, bg) => ({
+  fontSize:12, padding:"5px 13px", borderRadius:20, cursor:"pointer", border:"0.5px solid var(--color-border-tertiary)",
+  background: active ? (bg||"var(--color-text-primary)") : "var(--color-background-secondary)",
+  color: active ? "#fff" : "var(--color-text-secondary)",
+});
+
+// ── Confirm dialog (no window.confirm needed) ──
+function ConfirmDialog({ msg, onYes, onNo }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.5)", zIndex:999, display:"flex", alignItems:"center", justifyContent:"center" }}>
+      <div style={{ ...card, padding:"1.5rem", maxWidth:320, width:"90%", textAlign:"center" }}>
+        <div style={{ fontSize:15, marginBottom:20 }}>{msg}</div>
+        <div style={{ display:"flex", gap:10, justifyContent:"center" }}>
+          <button onClick={onNo} style={{ padding:"8px 24px", cursor:"pointer" }}>Zrušit</button>
+          <button onClick={onYes} style={{ padding:"8px 24px", cursor:"pointer", background:"#ef4444", color:"#fff", border:"none", borderRadius:"var(--border-radius-md)" }}>Vyhodit</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [gd, setGd] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  // auth
+  const [screen, setScreen] = useState("login"); // login | game | admin
+  const [authMode, setAuthMode] = useState("login");
+  const [nameIn, setNameIn] = useState("");
+  const [passIn, setPassIn] = useState("");
+  const [pass2In, setPass2In] = useState("");
+  const [isChild, setIsChild] = useState(false);
+  const [authErr, setAuthErr] = useState("");
+  const [me, setMe] = useState(null);
+
+  // admin
+  const [adminCodeIn, setAdminCodeIn] = useState("");
+  const [adminErr, setAdminErr] = useState("");
+  const [adminStage, setAdminStage] = useState("Skupiny");
+  const [resInputs, setResInputs] = useState({});
+  const [kickTarget, setKickTarget] = useState(null);
+  const [matchNameEdits, setMatchNameEdits] = useState({}); // {mid: {home, away}} draft edits in admin
+
+  // game
+  const [tab, setTab] = useState("zapasy");
+  const [stageFilter, setStageFilter] = useState("Skupiny");
+  const [tipDraft, setTipDraft] = useState({}); // mid -> {h,a}  — only for UNSAVED first tip
+  const [dsActive, setDsActive] = useState({}); // mid -> true    — druhaSance edit mode open
+
+  // ── storage ──
+  const load = useCallback(async () => {
+    try {
+      const r = await window.storage.get(STORAGE_KEY, true, true); // always fresh
+      if (r && r.value) {
+        const parsed = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+        setGd(parsed && parsed.players ? parsed : { players:{}, results:{} });
+      } else {
+        setGd({ players:{}, results:{} });
+      }
+    } catch(e) {
+      console.warn("load error:", e);
+      setGd({ players:{}, results:{} });
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load().then(() => {
+      // Zkus obnovit session z localStorage po refreshi
+      const savedSession = localStorage.getItem("ms2026_session");
+      if (savedSession) {
+        // Ověř že hráč stále existuje v datech
+        setGd(current => {
+          if (current?.players?.[savedSession]) {
+            setMe(savedSession);
+            setScreen("game");
+          } else {
+            // Hráč nenalezen v lokálních datech — možná se data nestihla načíst
+            // Zkusíme to znovu po krátkém zpoždění
+            setTimeout(async () => {
+              try {
+                const r = await window.storage.get(STORAGE_KEY, true, true); // always fresh
+                if (r && r.value) {
+                  const parsed = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+                  if (parsed?.players?.[savedSession]) {
+                    setGd(parsed);
+                    setMe(savedSession);
+                    setScreen("game");
+                    return;
+                  }
+                }
+              } catch(e) {}
+              // Hráč opravdu neexistuje
+              localStorage.removeItem("ms2026_session");
+            }, 1500);
+          }
+          return current;
+        });
+      }
+    });
+  }, [load]);
+
+  const persist = async (data) => {
+    try {
+      const r = await window.storage.set(STORAGE_KEY, JSON.stringify(data), true);
+      if (r !== null && r !== undefined) { setSaveMsg("✓"); setTimeout(() => setSaveMsg(""), 1500); }
+      else { setSaveMsg("✗"); }
+    } catch(e) {
+      console.warn("persist error:", e);
+      setSaveMsg("✗");
+    }
+  };
+
+  // ── auth ──
+  const doRegister = async () => {
+    const name = nameIn.trim();
+    if (!name) return setAuthErr("Zadej přezdívku.");
+    if (passIn.length < 3) return setAuthErr("Heslo musí mít alespoň 3 znaky.");
+    if (passIn !== pass2In) return setAuthErr("Hesla se neshodují.");
+    if (gd?.players?.[name]) return setAuthErr("Přezdívka je obsazená – přihlas se.");
+    const data = { ...gd, players: { ...gd.players } };
+    data.players[name] = {
+      pwHash: hashPw(passIn), isChild,
+      cards: { joker:1, risk:1, druhaSance:1, extraJoker: isChild?1:0 },
+      tips: {}, joinedAt: Date.now(),
+    };
+    setGd(data); await persist(data);
+    setMe(name); setAuthErr(""); setScreen("game");
+    localStorage.setItem("ms2026_session", name);
+  };
+
+  const doLogin = async () => {
+    const name = nameIn.trim();
+    if (!name || !passIn) return setAuthErr("Zadej jméno a heslo.");
+    setAuthErr("Načítám…");
+    let freshGd = gd;
+    try {
+      const r = await window.storage.get(STORAGE_KEY, true, true);
+      if (r && r.value) {
+        const parsed = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+        if (parsed && parsed.players) { freshGd = parsed; setGd(parsed); }
+      }
+    } catch(e) { console.warn("login fetch:", e); }
+    const p = freshGd?.players?.[name];
+    if (!p) return setAuthErr("Hráč nenalezen – zaregistruj se.");
+    if (p.pwHash !== hashPw(passIn)) return setAuthErr("Špatné heslo.");
+    setMe(name); setAuthErr(""); setScreen("game");
+  };
+
+  const doAdminLogin = () => {
+    if (adminCodeIn === ADMIN_CODE) { setScreen("admin"); setAdminErr(""); }
+    else setAdminErr("Nesprávný kód.");
+  };
+
+  // ── helpers ──
+  const myPlayer = gd?.players?.[me] ?? null;
+  const myCards = myPlayer?.cards ?? {};
+  const jokerLeft = (myCards.joker||0) + (myCards.extraJoker||0);
+
+  const totalPoints = (pName) => {
+    const tips = gd?.players?.[pName]?.tips ?? {};
+    const res = gd?.results ?? {};
+    return Object.entries(tips).reduce((s,[mid,t]) => {
+      const pts = calcFinal(t?.tip, res[mid], t?.card);
+      return s + (pts ?? 0);
+    }, 0);
+  };
+
+  const leaderboard = () =>
+    Object.keys(gd?.players ?? {})
+      .map(n => ({ n, pts: totalPoints(n), isChild: gd.players[n].isChild }))
+      .sort((a,b) => b.pts - a.pts);
+
+  // ── tip save ──
+  // Rules:
+  //   - BEFORE kickoff + tip not yet saved → can save freely
+  //   - AFTER kickoff + tip already saved → LOCKED, cannot change
+  //   - AFTER kickoff + tip saved + dsActive[mid] → 2. šance: can save ONCE, then permanently locked
+  //   - AFTER kickoff + no tip saved → cannot tip anymore
+  const saveTip = async (mid) => {
+    const match = MATCHES.find(m => m.id === mid);
+    const d = tipDraft[mid];
+    if (!d?.h === undefined || d?.a === undefined) return;
+    const h = parseInt(d.h), a = parseInt(d.a);
+    if (isNaN(h)||isNaN(a)||h<0||a<0) return;
+
+    const after = isAfterKickoff(match);
+    const existing = myPlayer?.tips?.[mid];
+    const alreadySaved = !!existing?.savedAt;
+    const usedDruhaSance = existing?.usedDruhaSance === true;
+
+    // Block if: already saved AND (kickoff passed OR druhaSance not active)
+    if (alreadySaved && !dsActive[mid]) return;
+    // Block if: kickoff passed and druhaSance not active (no tip yet — too late)
+    if (after && !dsActive[mid]) return;
+    // Block if: already used druhaSance on this match
+    if (usedDruhaSance) return;
+
+    const data = JSON.parse(JSON.stringify(gd));
+    const pl = data.players[me];
+    const tip = `${h}:${a}`;
+    const prevCard = pl.tips[mid]?.card ?? null;
+    const via2s = !!dsActive[mid];
+
+    pl.tips[mid] = { tip, card: prevCard, savedAt: Date.now(), usedDruhaSance: via2s };
+
+    if (via2s) {
+      // consume druhaSance card
+      pl.cards.druhaSance = Math.max(0, (pl.cards.druhaSance||0) - 1);
+      setDsActive(prev => { const n={...prev}; delete n[mid]; return n; });
+    }
+    setTipDraft(prev => { const n={...prev}; delete n[mid]; return n; });
+    setGd(data); await persist(data);
+  };
+
+  const toggleCard = async (mid, cardType) => {
+    if (!myPlayer?.tips?.[mid]?.savedAt) return; // need saved tip first
+    const match = MATCHES.find(m => m.id === mid);
+    if (isAfterKickoff(match)) return; // can't assign cards after kickoff
+    const data = JSON.parse(JSON.stringify(gd));
+    const t = data.players[me].tips[mid];
+    t.card = t.card === cardType ? null : cardType;
+    if (cardType === "joker" && jokerLeft <= 0 && t.card === "joker") { t.card = null; return; }
+    if (cardType === "risk" && (myCards.risk||0) <= 0 && t.card === "risk") { t.card = null; return; }
+    setGd(data); await persist(data);
+  };
+
+  const activateDruhaSance = (mid) => {
+    if ((myCards.druhaSance||0) <= 0) return;
+    const existing = myPlayer?.tips?.[mid];
+    if (!existing?.savedAt) return; // must have a saved tip
+    if (existing.usedDruhaSance) return; // already used 2. šance on this match
+    const match = MATCHES.find(m => m.id === mid);
+    if (isAfterKickoff(match)) return; // can only use BEFORE kickoff
+    // Pre-fill draft with current tip
+    const [h,a] = existing.tip.split(":");
+    setTipDraft(prev => ({ ...prev, [mid]: { h, a } }));
+    setDsActive(prev => ({ ...prev, [mid]: true }));
+  };
+
+  // ── admin: results ──
+  const saveResult = async (mid) => {
+    const val = (resInputs[mid]||"").trim();
+    if (!val.match(/^\d+:\d+$/)) return;
+    const data = JSON.parse(JSON.stringify(gd));
+    data.results = data.results || {};
+    data.results[mid] = val;
+    setGd(data); await persist(data);
+  };
+
+  const deleteResult = async (mid) => {
+    const data = JSON.parse(JSON.stringify(gd));
+    if (data.results) delete data.results[mid];
+    setGd(data); await persist(data);
+  };
+
+  // ── admin: kick player (NO window.confirm — uses ConfirmDialog) ──
+  const confirmKick = (pName) => setKickTarget(pName);
+
+  const saveMatchName = async (mid) => {
+    const edit = matchNameEdits[mid];
+    if (!edit) return;
+    const data = JSON.parse(JSON.stringify(gd));
+    data.matchNames = data.matchNames || {};
+    if (edit.home !== undefined) data.matchNames[mid + "_home"] = edit.home;
+    if (edit.away !== undefined) data.matchNames[mid + "_away"] = edit.away;
+    setGd(data); await persist(data);
+    setMatchNameEdits(prev => { const n = {...prev}; delete n[mid]; return n; });
+  };
+
+  const getMatchName = (match, side) => {
+    // Returns admin-overridden name or default
+    const key = match.id + "_" + side;
+    return gd?.matchNames?.[key] || match[side];
+  };
+
+  const doKick = async () => {
+    if (!kickTarget) return;
+    const data = JSON.parse(JSON.stringify(gd));
+    delete data.players[kickTarget];
+    setGd(data); await persist(data);
+    setKickTarget(null);
+  };
+
+  // ══════════════════════════════════
+  //  LOADING
+  // ══════════════════════════════════
+  if (loading) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:300,color:"var(--color-text-secondary)"}}>
+      Načítám…
+    </div>
+  );
+
+  // ══════════════════════════════════
+  //  LOGIN
+  // ══════════════════════════════════
+  if (screen === "login") return (
+    <div style={{maxWidth:420,margin:"0 auto",padding:"2rem 1rem"}}>
+      <div style={{textAlign:"center",marginBottom:"1.5rem"}}>
+        <div style={{fontSize:52}}>⚽</div>
+        <h1 style={{fontSize:24,fontWeight:700,margin:"8px 0 4px"}}>MS 2026 Tipovačka</h1>
+        <p style={{color:"var(--color-text-secondary)",fontSize:14,margin:0}}>{Object.keys(gd?.players||{}).length} hráčů právě hraje</p>
+      </div>
+
+      {/* mode toggle */}
+      <div style={{display:"flex",border:"0.5px solid var(--color-border-tertiary)",borderRadius:"var(--border-radius-lg)",overflow:"hidden",marginBottom:20}}>
+        {[["login","Přihlásit se"],["register","Registrovat se"]].map(([m,l]) => (
+          <button key={m} onClick={() => { setAuthMode(m); setAuthErr(""); }} style={{
+            flex:1,padding:"10px 0",fontSize:14,fontWeight:authMode===m?700:400,
+            background:authMode===m?"var(--color-text-primary)":"transparent",
+            color:authMode===m?"var(--color-background-primary)":"var(--color-text-secondary)",
+            border:"none",cursor:"pointer",
+          }}>{l}</button>
+        ))}
+      </div>
+
+      <div style={{...card,padding:"1.5rem"}}>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:6}}>Přezdívka</label>
+          <input value={nameIn} onChange={e=>setNameIn(e.target.value)} placeholder="Tvoje jméno ve hře…" style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{marginBottom: authMode==="register"?14:20}}>
+          <label style={{fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:6}}>Heslo</label>
+          <input type="password" value={passIn} onChange={e=>setPassIn(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&authMode==="login"&&doLogin()}
+            placeholder={authMode==="login"?"Heslo…":"Min. 3 znaky…"} style={{width:"100%",boxSizing:"border-box"}}/>
+        </div>
+        {authMode==="register" && <>
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:13,color:"var(--color-text-secondary)",display:"block",marginBottom:6}}>Heslo znovu</label>
+            <input type="password" value={pass2In} onChange={e=>setPass2In(e.target.value)} placeholder="Zopakuj heslo…" style={{width:"100%",boxSizing:"border-box"}}/>
+          </div>
+          <label style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,cursor:"pointer",fontSize:14}}>
+            <input type="checkbox" checked={isChild} onChange={e=>setIsChild(e.target.checked)}/>
+            Jsem dítě <span style={{color:"var(--color-text-secondary)",fontSize:13}}>(+1 extra Joker)</span>
+          </label>
+        </>}
+        {authErr && <div style={{fontSize:13,color:"var(--color-text-danger)",background:"rgba(239,68,68,0.1)",borderRadius:"var(--border-radius-md)",padding:"8px 12px",marginBottom:12}}>{authErr}</div>}
+        <button onClick={authMode==="login"?doLogin:doRegister} style={{width:"100%",padding:"10px 0",fontSize:15,fontWeight:600,cursor:"pointer"}}>
+          {authMode==="login"?"Přihlásit se →":"Registrovat se →"}
+        </button>
+      </div>
+
+      {/* admin entry */}
+      <div style={{marginTop:20,...card,padding:"1rem"}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:10}}>🔐 Admin přístup</div>
+        <div style={{display:"flex",gap:8}}>
+          <input type="password" value={adminCodeIn} onChange={e=>setAdminCodeIn(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&doAdminLogin()}
+            placeholder="Admin kód…" style={{flex:1,fontSize:13}}/>
+          <button onClick={doAdminLogin} style={{fontSize:13,padding:"6px 14px",cursor:"pointer"}}>Vstoupit</button>
+        </div>
+        {adminErr && <div style={{fontSize:13,color:"var(--color-text-danger)",marginTop:8}}>{adminErr}</div>}
+      </div>
+
+      {/* who's playing */}
+      {Object.keys(gd?.players||{}).length > 0 && (
+        <div style={{marginTop:16}}>
+          <p style={{fontSize:12,color:"var(--color-text-tertiary)",marginBottom:8}}>Hráči (klikni pro vyplnění jména):</p>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {Object.keys(gd.players).map(n => (
+              <span key={n} onClick={()=>setNameIn(n)} style={{background:"var(--color-background-secondary)",border:"0.5px solid var(--color-border-tertiary)",borderRadius:20,padding:"3px 12px",fontSize:12,cursor:"pointer"}}>
+                {n}{gd.players[n].isChild?" 👶":""}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  // ══════════════════════════════════
+  //  ADMIN
+  // ══════════════════════════════════
+  if (screen === "admin") return (
+    <div style={{maxWidth:680,margin:"0 auto",paddingBottom:"2rem"}}>
+      {kickTarget && <ConfirmDialog msg={`Opravdu vyhodit hráče „${kickTarget}"?`} onYes={doKick} onNo={()=>setKickTarget(null)}/>}
+
+      {/* header */}
+      <div style={{...card,borderRadius:0,borderLeft:"none",borderRight:"none",borderTop:"none",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
+        <div style={{fontWeight:700,fontSize:15}}>🔐 Admin panel</div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {saveMsg && <span style={{fontSize:12,color:"var(--color-text-success)"}}>{saveMsg}</span>}
+          <button onClick={()=>{setScreen("login");setAdminCodeIn("");}} style={{fontSize:12,padding:"4px 10px",cursor:"pointer"}}>Odhlásit</button>
+        </div>
+      </div>
+
+      <div style={{padding:"1rem"}}>
+        {/* stats */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+          {[["👥","Hráčů",Object.keys(gd?.players||{}).length],["✅","Výsledků",Object.keys(gd?.results||{}).length],["⚽","Zápasů",MATCHES.length]].map(([ico,lbl,val])=>(
+            <div key={lbl} style={{...card,padding:"12px",textAlign:"center"}}>
+              <div style={{fontSize:20}}>{ico}</div>
+              <div style={{fontSize:22,fontWeight:700}}>{val}</div>
+              <div style={{fontSize:11,color:"var(--color-text-secondary)"}}>{lbl}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Player management ── */}
+        <div style={{...card,marginBottom:16,overflow:"hidden"}}>
+          <div style={{padding:"10px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",fontWeight:700,fontSize:14}}>
+            👥 Správa hráčů
+          </div>
+          {Object.keys(gd?.players||{}).length === 0 && (
+            <div style={{padding:"14px 16px",fontSize:13,color:"var(--color-text-secondary)"}}>Žádní hráči.</div>
+          )}
+          {Object.keys(gd?.players||{}).map(pName => {
+            const p = gd.players[pName];
+            const tipCount = Object.values(p.tips||{}).filter(t=>t?.tip).length;
+            const pts = totalPoints(pName);
+            return (
+              <div key={pName} style={{padding:"11px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",alignItems:"center",gap:12}}>
+                <div style={{flex:1}}>
+                  <span style={{fontWeight:600,fontSize:14}}>{pName}</span>
+                  {p.isChild && <span style={{fontSize:12,marginLeft:6}}>👶</span>}
+                  <span style={{fontSize:12,color:"var(--color-text-secondary)",marginLeft:10}}>{tipCount} tipů · {pts} b</span>
+                </div>
+                <button
+                  onClick={() => confirmKick(pName)}
+                  style={{fontSize:12,padding:"5px 14px",cursor:"pointer",background:"rgba(239,68,68,0.1)",color:"#ef4444",border:"0.5px solid rgba(239,68,68,0.35)",borderRadius:"var(--border-radius-md)",fontWeight:600}}
+                >
+                  Vyhodit
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Results ── */}
+        <div style={{fontWeight:700,fontSize:14,marginBottom:10}}>⚽ Zadat výsledky</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+          {STAGES.map(s=>(
+            <button key={s} onClick={()=>setAdminStage(s)} style={pill(adminStage===s)}>{s}</button>
+          ))}
+        </div>
+
+        {MATCHES.filter(m=>m.stage===adminStage).map(match => {
+          const result = gd?.results?.[match.id];
+          const tipCount = Object.values(gd?.players||{}).filter(p=>p.tips?.[match.id]?.savedAt).length;
+          const mHome = getMatchName(match,"home");
+          const mAway = getMatchName(match,"away");
+          const editH = matchNameEdits[match.id]?.home;
+          const editA = matchNameEdits[match.id]?.away;
+          return (
+            <div key={match.id} style={{...card,padding:"14px 16px",marginBottom:10,borderColor: result?"rgba(16,185,129,0.4)":"var(--color-border-tertiary)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                <div>
+                  <div style={{fontWeight:600,fontSize:14}}>{FLAG[mHome]||"🏳️"} {mHome} vs {mAway} {FLAG[mAway]||"🏳️"}</div>
+                  <div style={{fontSize:12,color:"var(--color-text-secondary)",marginTop:2}}>
+                    {match.date.slice(5).replace("-",".")} {match.time} · {tipCount} tip{tipCount!==1?"ů":""}
+                  </div>
+                </div>
+                {result && (
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontWeight:700,fontSize:16,color:"var(--color-text-success)"}}>{result}</span>
+                    <button onClick={()=>deleteResult(match.id)} style={{fontSize:11,padding:"2px 8px",color:"#ef4444",border:"0.5px solid rgba(239,68,68,0.35)",background:"transparent",borderRadius:"var(--border-radius-sm)",cursor:"pointer"}}>✕</button>
+                  </div>
+                )}
+              </div>
+
+              {/* ── Přejmenování týmů (pouze KO fáze) ── */}
+              {match.stage !== "Skupiny" && (
+                <div style={{marginBottom:10,padding:"8px 10px",background:"rgba(245,158,11,0.07)",border:"0.5px solid rgba(245,158,11,0.25)",borderRadius:"var(--border-radius-md)"}}>
+                  <div style={{fontSize:11,color:"#f59e0b",marginBottom:6,fontWeight:600}}>✏️ Přejmenovat týmy</div>
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                    <input
+                      value={editH !== undefined ? editH : mHome}
+                      onChange={e=>setMatchNameEdits(p=>({...p,[match.id]:{...(p[match.id]||{}),home:e.target.value}}))}
+                      style={{width:140,fontSize:13}}
+                      placeholder="Domácí tým"
+                    />
+                    <span style={{color:"var(--color-text-tertiary)",fontSize:12}}>vs</span>
+                    <input
+                      value={editA !== undefined ? editA : mAway}
+                      onChange={e=>setMatchNameEdits(p=>({...p,[match.id]:{...(p[match.id]||{}),away:e.target.value}}))}
+                      style={{width:140,fontSize:13}}
+                      placeholder="Hostující tým"
+                    />
+                    <button
+                      onClick={()=>saveMatchName(match.id)}
+                      style={{fontSize:12,padding:"5px 14px",cursor:"pointer",fontWeight:600,background:"rgba(245,158,11,0.18)",color:"#f59e0b",border:"0.5px solid rgba(245,158,11,0.4)",borderRadius:"var(--border-radius-sm)"}}
+                    >Uložit</button>
+                  </div>
+                </div>
+              )}
+              <div style={{display:"flex",gap:8,alignItems:"center",marginBottom: tipCount>0?12:0}}>
+                <input
+                  value={resInputs[match.id]??(result||"")}
+                  onChange={e=>setResInputs(p=>({...p,[match.id]:e.target.value}))}
+                  placeholder="Výsledek – např. 2:1"
+                  style={{width:160,fontSize:14}}
+                />
+                <button onClick={()=>saveResult(match.id)} style={{fontSize:13,padding:"6px 16px",cursor:"pointer",fontWeight:600}}>
+                  {result?"Přepsat":"Uložit"}
+                </button>
+              </div>
+
+              {tipCount > 0 && (
+                <div>
+                  <div style={{fontSize:11,color:"var(--color-text-tertiary)",marginBottom:6}}>Tipy hráčů:</div>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                    {Object.entries(gd.players).filter(([,p])=>p.tips?.[match.id]?.savedAt).map(([name,p])=>{
+                      const t = p.tips[match.id];
+                      const pts = calcFinal(t.tip, result, t.card);
+                      return (
+                        <span key={name} style={{fontSize:12,padding:"3px 10px",borderRadius:20,border:"0.5px solid var(--color-border-tertiary)",
+                          background: pts!==null?(pts>0?"rgba(16,185,129,0.15)":"rgba(239,68,68,0.1)"):"var(--color-background-secondary)"}}>
+                          {name}: <strong>{t.tip}</strong>
+                          {t.card&&<span style={{marginLeft:4}}>{t.card==="joker"?"🃏":t.card==="risk"?"⚠️":"🔄"}</span>}
+                          {pts!==null&&<span style={{marginLeft:4,color:pts>0?"var(--color-text-success)":"#ef4444"}}>{pts>0?"+":""}{pts}b</span>}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  // ══════════════════════════════════
+  //  GAME
+  // ══════════════════════════════════
+  return (
+    <div style={{maxWidth:680,margin:"0 auto",paddingBottom:"2rem"}}>
+      {/* header */}
+      <div style={{...card,borderRadius:0,borderLeft:"none",borderRight:"none",borderTop:"none",padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:22}}>⚽</span>
+          <div>
+            <div style={{fontWeight:700,fontSize:15}}>{me}</div>
+            <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>{totalPoints(me)} b · MS 2026</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {saveMsg&&<span style={{fontSize:12,color:"var(--color-text-success)"}}>{saveMsg}</span>}
+          <button onClick={()=>{setScreen("login");setMe(null);localStorage.removeItem("ms2026_session");}} style={{fontSize:12,padding:"4px 10px",cursor:"pointer"}}>Odhlásit</button>
+        </div>
+      </div>
+
+      {/* tabs */}
+      <div style={{display:"flex",borderBottom:"0.5px solid var(--color-border-tertiary)",background:"var(--color-background-primary)"}}>
+        {[["zapasy","Zápasy"],["tabulka","Tabulka"],["karty","Karty"],["pravidla","Pravidla"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{
+            flex:1,padding:"12px 4px",fontSize:13,fontWeight:tab===id?700:400,
+            color:tab===id?"var(--color-text-primary)":"var(--color-text-secondary)",
+            background:"transparent",border:"none",
+            borderBottom:tab===id?"2px solid var(--color-text-primary)":"2px solid transparent",cursor:"pointer",
+          }}>{lbl}</button>
+        ))}
+      </div>
+
+      {/* ── ZÁPASY ── */}
+      {tab==="zapasy" && (
+        <div style={{padding:"1rem"}}>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:14}}>
+            {STAGES.map(s=><button key={s} onClick={()=>setStageFilter(s)} style={pill(stageFilter===s)}>{s}</button>)}
+          </div>
+
+          {MATCHES.filter(m=>m.stage===stageFilter).map(match => {
+            const after = isAfterKickoff(match);
+            const result = gd?.results?.[match.id];
+            const td = myPlayer?.tips?.[match.id] ?? null;
+            const myTip = td?.tip ?? "";
+            const myCard = td?.card ?? null;
+            const saved = !!td?.savedAt;
+            const usedDS = !!td?.usedDruhaSance;
+            const pts = calcFinal(myTip, result, myCard);
+            const dsOpen = !!dsActive[match.id];
+
+            // States:
+            // A: before kickoff, no tip yet, not in ds mode → fresh input
+            // B: before kickoff, tip saved, not in ds mode → locked badge + card buttons
+            // C: before kickoff, tip saved, ds mode open → 2. šance edit input
+            // D: after kickoff, tip saved → locked badge (no changes possible)
+            // E: after kickoff, no tip → "nezadáno"
+            const stateA = !after && !saved && !dsOpen;
+            const stateB = !after && saved && !dsOpen;
+            const stateC = !after && saved && dsOpen;
+            const stateD = after && saved;
+            const stateE = after && !saved;
+
+            return (
+              <div key={match.id} style={{
+                ...card,
+                padding:"14px 16px",marginBottom:10,
+                borderColor: result&&pts!==null&&pts>0?"rgba(16,185,129,0.4)":"var(--color-border-tertiary)"
+              }}>
+                {/* meta */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>
+                    {match.date.slice(5).replace("-",".")} {match.time}
+                    {match.group!=="R32"&&match.group!=="QF"&&match.group!=="SF"&&match.group!=="FIN"?` · sk. ${match.group}`:""}
+                  </span>
+                  <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                    {result ? (
+                      <span style={{fontSize:13,fontWeight:700,padding:"2px 10px",borderRadius:"var(--border-radius-md)",
+                        background:pts!==null&&pts>0?"rgba(16,185,129,0.15)":"var(--color-background-secondary)",
+                        color:pts!==null&&pts>0?"var(--color-text-success)":"var(--color-text-secondary)"}}>
+                        {result}{pts!==null?` · ${pts}b`:""}
+                      </span>
+                    ) : after ? <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>⏸ hráno</span> : null}
+                  </div>
+                </div>
+
+                {/* teams */}
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                  <span style={{fontSize:18}}>{FLAG[getMatchName(match,"home")]||""}</span>
+                  <span style={{fontWeight:700,fontSize:15,flex:1}}>{match.home}</span>
+                  <span style={{fontSize:12,color:"var(--color-text-tertiary)"}}>vs</span>
+                  <span style={{fontWeight:700,fontSize:15,flex:1,textAlign:"right"}}>{match.away}</span>
+                  <span style={{fontSize:18}}>{FLAG[getMatchName(match,"away")]||""}</span>
+                </div>
+
+                {/* STATE A — fresh input before kickoff */}
+                {stateA && (
+                  <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                    <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Tip:</span>
+                    <input type="number" min="0" max="20"
+                      value={tipDraft[match.id]?.h??""}
+                      onChange={e=>setTipDraft(p=>({...p,[match.id]:{...p[match.id],h:e.target.value}}))}
+                      style={{width:54,textAlign:"center"}} placeholder="0"/>
+                    <span style={{fontWeight:700}}>:</span>
+                    <input type="number" min="0" max="20"
+                      value={tipDraft[match.id]?.a??""}
+                      onChange={e=>setTipDraft(p=>({...p,[match.id]:{...p[match.id],a:e.target.value}}))}
+                      style={{width:54,textAlign:"center"}} placeholder="0"/>
+                    <button onClick={()=>saveTip(match.id)} style={{fontSize:13,padding:"6px 16px",fontWeight:600,cursor:"pointer"}}>
+                      Uložit tip
+                    </button>
+                  </div>
+                )}
+
+                {/* STATE B — tip saved, before kickoff, not in ds mode */}
+                {stateB && (
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10}}>
+                      <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Tvůj tip:</span>
+                      <span style={{fontWeight:700,fontSize:15,background:"var(--color-background-secondary)",padding:"3px 14px",borderRadius:"var(--border-radius-md)"}}>{myTip}</span>
+                      <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>🔒 zamčeno</span>
+                      {myCard && <span style={{fontSize:12,padding:"3px 10px",borderRadius:20,border:"0.5px solid var(--color-border-tertiary)",
+                        background:myCard==="joker"?"rgba(245,158,11,0.15)":myCard==="risk"?"rgba(239,68,68,0.12)":"var(--color-background-secondary)"}}>
+                        {myCard==="joker"?"🃏 Joker":myCard==="risk"?"⚠️ Risk":"🔄"}
+                      </span>}
+                      {/* 2. šance button — before kickoff, if card available and not yet used */}
+                      {(myCards.druhaSance||0)>0 && !usedDS && (
+                        <button onClick={()=>activateDruhaSance(match.id)} style={{
+                          marginLeft:"auto",fontSize:12,padding:"5px 14px",cursor:"pointer",
+                          background:"#10b981",color:"#fff",border:"none",borderRadius:20,fontWeight:600,
+                        }}>
+                          🔄 2. šance ({myCards.druhaSance}×)
+                        </button>
+                      )}
+                      {usedDS && <span style={{fontSize:11,color:"var(--color-text-tertiary)",marginLeft:"auto"}}>🔄 2. šance použita</span>}
+                    </div>
+                    {/* card buttons */}
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {jokerLeft>0 && (
+                        <button onClick={()=>toggleCard(match.id,"joker")} style={pill(myCard==="joker","#f59e0b")}>
+                          🃏 Joker ({jokerLeft}×)
+                        </button>
+                      )}
+                      {(myCards.risk||0)>0 && (
+                        <button onClick={()=>toggleCard(match.id,"risk")} style={pill(myCard==="risk","#ef4444")}>
+                          ⚠️ Risk ({myCards.risk}×)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* STATE C — 2. šance edit mode (before kickoff) */}
+                {stateC && (
+                  <div>
+                    <div style={{fontSize:12,color:"#10b981",marginBottom:8,padding:"6px 10px",background:"rgba(16,185,129,0.08)",borderRadius:"var(--border-radius-md)"}}>
+                      🔄 <strong>2. šance</strong> – zadej opravený tip před výkopem. Po uložení bude karta spotřebována a tip <strong>trvale zamčen</strong>.
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Nový tip:</span>
+                      <input type="number" min="0" max="20"
+                        value={tipDraft[match.id]?.h??""}
+                        onChange={e=>setTipDraft(p=>({...p,[match.id]:{...p[match.id],h:e.target.value}}))}
+                        style={{width:54,textAlign:"center"}} placeholder="0"/>
+                      <span style={{fontWeight:700}}>:</span>
+                      <input type="number" min="0" max="20"
+                        value={tipDraft[match.id]?.a??""}
+                        onChange={e=>setTipDraft(p=>({...p,[match.id]:{...p[match.id],a:e.target.value}}))}
+                        style={{width:54,textAlign:"center"}} placeholder="0"/>
+                      <button onClick={()=>saveTip(match.id)} style={{fontSize:13,padding:"6px 16px",fontWeight:600,cursor:"pointer",background:"#10b981",color:"#fff",border:"none",borderRadius:"var(--border-radius-md)"}}>
+                        ✓ Potvrdit
+                      </button>
+                      <button onClick={()=>{setDsActive(p=>{const n={...p};delete n[match.id];return n;});setTipDraft(p=>{const n={...p};delete n[match.id];return n;});}}
+                        style={{fontSize:12,padding:"5px 10px",cursor:"pointer",border:"0.5px solid var(--color-border-tertiary)",background:"transparent",borderRadius:"var(--border-radius-md)"}}>
+                        Zrušit
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* STATE D — tip saved, permanently locked */}
+                {stateD && (
+                  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <span style={{fontSize:13,color:"var(--color-text-secondary)"}}>Tvůj tip:</span>
+                    <span style={{fontWeight:700,fontSize:15,background:"var(--color-background-secondary)",padding:"3px 14px",borderRadius:"var(--border-radius-md)"}}>{myTip}</span>
+                    {myCard && <span style={{fontSize:12,padding:"3px 10px",borderRadius:20,border:"0.5px solid var(--color-border-tertiary)"}}>{myCard==="joker"?"🃏 Joker":myCard==="risk"?"⚠️ Risk":"🔄"}</span>}
+                    {usedDS && <span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>🔒 upraveno 2. šancí</span>}
+                  </div>
+                )}
+
+                {/* STATE E — no tip, after kickoff */}
+                {stateE && (
+                  <div style={{fontSize:13,color:"var(--color-text-tertiary)",fontStyle:"italic"}}>
+                    Tip nebyl zadán před výkopem.
+                  </div>
+                )}
+
+
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── TABULKA ── */}
+      {tab==="tabulka" && (
+        <div style={{padding:"1rem"}}>
+          <div style={{...card,overflow:"hidden",marginBottom:14}}>
+            <div style={{padding:"12px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontWeight:700,fontSize:15}}>🏆 Žebříček</span>
+              <button onClick={load} style={{fontSize:12,padding:"4px 10px",cursor:"pointer"}}>Obnovit</button>
+            </div>
+            {leaderboard().length===0&&<div style={{padding:24,textAlign:"center",color:"var(--color-text-secondary)"}}>Zatím žádní hráči</div>}
+            {leaderboard().map((p,i)=>{
+              const tips = gd.players[p.n]?.tips||{};
+              const total = Object.values(tips).filter(t=>t?.savedAt).length;
+              const withRes = Object.entries(tips).filter(([mid,t])=>t?.savedAt&&gd?.results?.[mid]).length;
+              return (
+                <div key={p.n} style={{padding:"12px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",alignItems:"center",gap:12,
+                  background:p.n===me?"var(--color-background-secondary)":"transparent"}}>
+                  <span style={{fontSize:i<3?22:14,width:32,textAlign:"center"}}>{["🥇","🥈","🥉"][i]||`${i+1}.`}</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:15}}>{p.n}{p.isChild?" 👶":""} {p.n===me&&<span style={{fontSize:11,color:"var(--color-text-tertiary)"}}>(ty)</span>}</div>
+                    <div style={{fontSize:12,color:"var(--color-text-secondary)"}}>{total} tipů · {withRes} vyhodnoceno</div>
+                  </div>
+                  <span style={{fontSize:22,fontWeight:700}}>{p.pts}</span>
+                  <span style={{fontSize:12,color:"var(--color-text-secondary)"}}>b</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {myPlayer && (
+            <div style={{...card,overflow:"hidden"}}>
+              <div style={{padding:"12px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",fontWeight:700,fontSize:15}}>Moje tipy</div>
+              {Object.entries(myPlayer.tips||{}).filter(([,t])=>t?.savedAt).map(([mid,t])=>{
+                const match=MATCHES.find(m=>m.id===parseInt(mid));
+                const result=gd?.results?.[mid];
+                const pts=calcFinal(t.tip,result,t.card);
+                if(!match) return null;
+                return (
+                  <div key={mid} style={{padding:"10px 16px",borderBottom:"0.5px solid var(--color-border-tertiary)",display:"flex",gap:8,alignItems:"center"}}>
+                    <span style={{fontSize:12,color:"var(--color-text-secondary)",flex:2,minWidth:0}}>{match.home} – {match.away}</span>
+                    <span style={{fontSize:13,fontWeight:700}}>{t.tip}</span>
+                    {t.card&&<span style={{fontSize:11}}>{t.card==="joker"?"🃏":t.card==="risk"?"⚠️":"🔄"}</span>}
+                    {result&&<span style={{fontSize:12,color:"var(--color-text-tertiary)"}}>→ {result}</span>}
+                    {pts!==null&&<span style={{fontSize:13,fontWeight:700,minWidth:32,textAlign:"right",color:pts>0?"var(--color-text-success)":"#ef4444"}}>{pts>0?"+":""}{pts}b</span>}
+                  </div>
+                );
+              })}
+              {Object.values(myPlayer.tips||{}).filter(t=>t?.savedAt).length===0&&<div style={{padding:20,textAlign:"center",color:"var(--color-text-secondary)",fontSize:14}}>Zatím žádné tipy</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── KARTY ── */}
+      {tab==="karty" && myPlayer && (
+        <div style={{padding:"1rem"}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(185px,1fr))",gap:12,marginBottom:14}}>
+            {[
+              {lbl:"Joker",count:jokerLeft,color:"#f59e0b",icon:"🃏",desc:"Zdvojnásobí body. Přiřaď k tipu před výkopem."},
+              {lbl:"Risk karta",count:myCards.risk||0,color:"#ef4444",icon:"⚠️",desc:"Přesný tip = 8 bodů. Jinak −2. Přiřaď před výkopem."},
+              {lbl:"2. šance",count:myCards.druhaSance||0,color:"#10b981",icon:"🔄",desc:"Oprava tipu PŘED výkopem – po prvním uložení, dokud nezačne zápas."},
+            ].map(c=>(
+              <div key={c.lbl} style={{...card,padding:"1.25rem",opacity:c.count===0?0.45:1}}>
+                <div style={{fontSize:30,marginBottom:8}}>{c.icon}</div>
+                <div style={{fontWeight:700,fontSize:16,marginBottom:4}}>{c.lbl}</div>
+                <div style={{fontSize:13,color:"var(--color-text-secondary)",marginBottom:14}}>{c.desc}</div>
+                <div style={{fontSize:24,fontWeight:700,color:c.color}}>{c.count}<span style={{fontSize:13,fontWeight:400,color:"var(--color-text-tertiary)",marginLeft:4}}>zbývá</span></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── PRAVIDLA ── */}
+      {tab==="pravidla" && (
+        <div style={{padding:"1rem"}}>
+          {[
+            {title:"Bodování",items:["Přesný výsledek: 5 bodů","Správný směr (výhra/remíza/prohra): 3 body","Bonus – správný počet gólů jednoho týmu: +1 bod"]},
+            {title:"Příklad",items:["Tip 2:1 · Výsledek 3:1","→ Správný směr = 3 body","→ Bonus (hosté dali 1 gól v obou) = +1 bod","→ Celkem: 4 body"]},
+            {title:"Zamčení tipů",items:["Tip lze zadat jednou, pak je TRVALE zamčen.","Po výkopu nejde tip zadat ani změnit.","2. šance = jedna oprava tipu PŘED výkopem (po prvním uložení).","Po použití 2. šance je tip trvale zamčen (nelze znovu měnit)."]},
+            {title:"Bonusové karty",items:["🃏 Joker – 2× body za zápas (přiřaď před výkopem)","⚠️ Risk – přesný tip = 8b, jinak vždy −2b","🔄 2. šance – oprava tipu PŘED výkopem, po prvním uložení (spotřebuje kartu)"]},
+            {title:"Děti",items:["Hráč označený jako dítě dostane 1× extra Joker navíc."]},
+          ].map(sec=>(
+            <div key={sec.title} style={{...card,padding:"1.25rem",marginBottom:12}}>
+              <div style={{fontWeight:700,fontSize:16,marginBottom:10}}>{sec.title}</div>
+              {sec.items.map((item,i)=>(
+                <div key={i} style={{fontSize:14,color:"var(--color-text-secondary)",padding:"5px 0",borderBottom:i<sec.items.length-1?"0.5px solid var(--color-border-tertiary)":"none"}}>{item}</div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+const rootEl = document.getElementById('root');
+ReactDOM.createRoot(rootEl).render(React.createElement(Root));
+</script>
+</body>
+</html>
