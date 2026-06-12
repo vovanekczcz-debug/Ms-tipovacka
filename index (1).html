@@ -464,8 +464,7 @@ function App() {
   const [pass2In, setPass2In] = useState("");
   const [isChild, setIsChild] = useState(false);
   const [authErr, setAuthErr] = useState("");
-  const [me, setMe] = useState(null);
-
+ const [me, setMe] = useState(localStorage.getItem("loggedUser"));
   // admin
   const [adminCodeIn, setAdminCodeIn] = useState("");
   const [adminErr, setAdminErr] = useState("");
