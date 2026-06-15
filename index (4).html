@@ -397,10 +397,19 @@ function App() {
     localStorage.setItem("ms2026_session", name);
   };
 
-  const doLogin = () => {
+const doLogin = async () => {
     const name = nameIn.trim();
     if (!name || !passIn) return setAuthErr("Zadej jméno a heslo.");
-    const p = gd?.players?.[name];
+    setAuthErr("Načítám…");
+    let players = gd?.players ?? {};
+    try {
+      const r = await window.storage.get(STORAGE_KEY, true, true);
+      if (r && r.value) {
+        const parsed = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+        if (parsed?.players) { players = parsed.players; setGd(parsed); }
+      }
+    } catch(e) { console.warn("doLogin fetch:", e); }
+    const p = players[name];
     if (!p) return setAuthErr("Hráč nenalezen – zaregistruj se.");
     if (p.pwHash !== hashPw(passIn)) return setAuthErr("Špatné heslo.");
     setMe(name); setAuthErr(""); setScreen("game");
